@@ -174,6 +174,7 @@ export const en: Translations = {
       'nav.skills': 'Open skills',
       'nav.messaging': 'Open messaging',
       'nav.artifacts': 'Open artifacts',
+      'nav.hollow': 'Open Hollow provider vault',
       'nav.cron': 'Open scheduled jobs',
       'nav.agents': 'Open agents',
       'session.new': 'New session',
@@ -1045,7 +1046,8 @@ export const en: Translations = {
       'new-session': 'New session',
       skills: 'Skills & Tools',
       messaging: 'Messaging',
-      artifacts: 'Artifacts'
+      artifacts: 'Artifacts',
+      hollow: 'Hollow'
     },
     searchAria: 'Search sessions',
     searchPlaceholder: 'Search sessions…',
