@@ -37,6 +37,18 @@ def _history_to_wire(history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     return out
 
 
+def _conversation_id(agent) -> str:
+    """Stable id threading the per-conversation digest. Gateway sessions have a
+    cross-process key; CLI sessions fall back to the per-run session id."""
+    key = getattr(agent, "_gateway_session_key", None)
+    if isinstance(key, str) and key:
+        return key
+    sid = getattr(agent, "session_id", None)
+    if isinstance(sid, str) and sid:
+        return sid
+    return "hermes-unknown"
+
+
 def _drive(events: Iterable[Dict[str, Any]], stream_callback) -> List[Dict[str, Any]]:
     """Fire ``stream_callback`` for each token (then a final ``None`` end-of-stream
     sentinel, matching Hermes convention) and return all events collected."""
@@ -126,6 +138,7 @@ def run_turn_via_ellie(
         "user_text": user_message,
         "history": _history_to_wire(history),
         "skills": [],
+        "conversation_id": _conversation_id(agent),
     }
     headers = {"Authorization": f"Bearer {bearer}"} if bearer else {}
 

@@ -192,3 +192,31 @@ def test_forwarder_uses_native_loop_by_default():
 
     assert out == {"final_response": "native"}
     native.assert_called_once()
+
+
+def test_run_turn_sends_conversation_id_prefers_gateway_key():
+    agent = MagicMock()
+    agent._gateway_session_key = "agent:main:telegram:dm:123"
+    agent.session_id = "20260614_090714_abc"
+    fake_client = MagicMock()
+    fake_client.__enter__.return_value = fake_client
+    fake_client.__exit__.return_value = False
+    fake_client.stream.return_value = _FakeStream(['data: {"type":"turn_end","prose":"hi"}'])
+    with patch("agent.ellie_bridge.httpx.Client", return_value=fake_client):
+        run_turn_via_ellie(agent, "hello", sidecar_url="http://x", bearer="t")
+    _, kwargs = fake_client.stream.call_args
+    assert kwargs["json"]["conversation_id"] == "agent:main:telegram:dm:123"
+
+
+def test_run_turn_conversation_id_falls_back_to_session_id():
+    agent = MagicMock()
+    agent._gateway_session_key = None
+    agent.session_id = "20260614_090714_abc"
+    fake_client = MagicMock()
+    fake_client.__enter__.return_value = fake_client
+    fake_client.__exit__.return_value = False
+    fake_client.stream.return_value = _FakeStream(['data: {"type":"turn_end","prose":"hi"}'])
+    with patch("agent.ellie_bridge.httpx.Client", return_value=fake_client):
+        run_turn_via_ellie(agent, "hello", sidecar_url="http://x", bearer="t")
+    _, kwargs = fake_client.stream.call_args
+    assert kwargs["json"]["conversation_id"] == "20260614_090714_abc"
