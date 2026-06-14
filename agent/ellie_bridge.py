@@ -194,3 +194,21 @@ def notify_ellie_session_end(
             resp.raise_for_status()
     except Exception as exc:  # noqa: BLE001 — fail-soft by design
         logger.debug("ellie session-end notify failed (ignored): %s", exc)
+
+
+def maybe_notify_ellie_session_end(
+    agent, messages, *, sidecar_url="http://127.0.0.1:3002", bearer=""
+) -> None:
+    """Fire the session-end notify exactly once per agent, only when routing to
+    the Ellie backend. Fully guarded — never raises."""
+    try:
+        if getattr(agent, "backend", None) != "ellie":
+            return
+        if getattr(agent, "_ellie_session_end_sent", False):
+            return
+        agent._ellie_session_end_sent = True
+        notify_ellie_session_end(
+            agent, messages, sidecar_url=sidecar_url, bearer=bearer
+        )
+    except Exception:  # noqa: BLE001
+        pass
