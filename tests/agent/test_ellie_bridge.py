@@ -139,3 +139,56 @@ def test_run_turn_via_ellie_posts_and_translates():
     assert result["final_response"] == "Hi"
     assert result["completed"] is True
     assert result["session_id"] == "s1"
+
+
+def _ensure_run_agent_importable():
+    """Stub optional heavy-weight packages so run_agent imports cleanly."""
+    import sys
+    from unittest.mock import MagicMock
+
+    _STUBS = [
+        "yaml", "dotenv", "fire", "firecrawl", "fal_client",
+        "openai", "anthropic", "tiktoken", "PIL", "PIL.Image",
+        "croniter", "cryptography", "requests", "websockets",
+        "google", "google.auth", "boto3", "botocore",
+        "modal", "aiohttp", "numpy", "cv2",
+    ]
+    for _mod in _STUBS:
+        sys.modules.setdefault(_mod, MagicMock())
+    # Prevent MagicMock from poisoning os.environ lookups inside dotenv/yaml
+    sys.modules["dotenv"].load_dotenv = lambda *a, **k: None
+    sys.modules["yaml"].safe_load = lambda *a, **k: {}
+
+
+def test_forwarder_routes_to_ellie_when_backend_is_ellie():
+    import os
+    _ensure_run_agent_importable()
+    with patch.dict(os.environ, {"HERMES_HOME": "/tmp/_test_hermes_home_ellie_bridge"}):
+        import run_agent
+
+    fake_self = MagicMock()
+    sentinel = {"final_response": "from ellie", "completed": True}
+
+    cfg = {"agent": {"backend": "ellie", "ellie_sidecar_url": "http://x:3002", "ellie_sidecar_token": "tok"}}
+    with patch("hermes_cli.config.load_config_readonly", return_value=cfg), \
+         patch("agent.ellie_bridge.run_turn_via_ellie", return_value=sentinel) as bridge:
+        out = run_agent.AIAgent.run_conversation(fake_self, "hello")
+
+    assert out is sentinel
+    bridge.assert_called_once()
+
+
+def test_forwarder_uses_native_loop_by_default():
+    import os
+    _ensure_run_agent_importable()
+    with patch.dict(os.environ, {"HERMES_HOME": "/tmp/_test_hermes_home_ellie_bridge"}):
+        import run_agent
+
+    fake_self = MagicMock()
+    cfg = {}  # no agent.backend -> native
+    with patch("hermes_cli.config.load_config_readonly", return_value=cfg), \
+         patch("agent.conversation_loop.run_conversation", return_value={"final_response": "native"}) as native:
+        out = run_agent.AIAgent.run_conversation(fake_self, "hello")
+
+    assert out == {"final_response": "native"}
+    native.assert_called_once()
