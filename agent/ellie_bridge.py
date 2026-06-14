@@ -117,7 +117,9 @@ def run_turn_via_ellie(
     """Route one Hermes turn to the Ellie sidecar and return Hermes's result dict.
 
     Note: ``system_message`` and ``persist_user_message`` are intentionally NOT
-    forwarded — Ellie uses its own identity prompt in Phase 1.
+    forwarded — Ellie uses its own identity prompt in Phase 1. ``task_id`` is
+    accepted to mirror ``run_conversation``'s signature but is a Hermes-side
+    concept with no wire equivalent, so it is intentionally not sent to Ellie.
     """
     history = conversation_history or []
     payload = {
