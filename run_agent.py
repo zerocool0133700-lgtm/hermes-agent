@@ -5211,7 +5211,24 @@ class AIAgent:
         stream_callback: Optional[callable] = None,
         persist_user_message: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Forwarder — see ``agent.conversation_loop.run_conversation``."""
+        """Forwarder — see ``agent.conversation_loop.run_conversation``.
+
+        When ``agent.backend == "ellie"`` in config, the turn is routed to the
+        Ellie (Rust) sidecar instead of the native loop.
+        """
+        from hermes_cli.config import load_config_readonly
+        _agent_cfg = load_config_readonly().get("agent", {})
+        if _agent_cfg.get("backend") == "ellie":
+            from agent.ellie_bridge import run_turn_via_ellie
+            return run_turn_via_ellie(
+                self,
+                user_message,
+                conversation_history=conversation_history,
+                task_id=task_id,
+                stream_callback=stream_callback,
+                sidecar_url=_agent_cfg.get("ellie_sidecar_url", "http://127.0.0.1:3002"),
+                bearer=_agent_cfg.get("ellie_sidecar_token", ""),
+            )
         from agent.conversation_loop import run_conversation
         return run_conversation(self, user_message, system_message, conversation_history, task_id, stream_callback, persist_user_message)
 
