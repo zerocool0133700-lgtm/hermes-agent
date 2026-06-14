@@ -85,4 +85,14 @@ A fact stated in session 1 is (a) present in the Forest after session-end (step 
 
 ## Run log
 
-**2026-06-14 — NOT YET EXECUTED.** Reachability checked: Forest bridge `:3001` is **up**; `:3002` is occupied by the existing (non-continuity) gateway; Hermes config is currently `backend: local` (not `ellie`). Executing the smoke requires: building/running a continuity-enabled gateway on a spare port, a throwaway `users.id` UUID, temporarily repointing Hermes to `backend: ellie`, and writing to the Forest (billing a real LLM). Deferred pending Dave's go-ahead and choice of target Forest/scope. **No pass has been observed; the loop is proven only at the wiring level so far.**
+**2026-06-14 — PASS (loop closed end-to-end).** Run against an isolated `2/2/smoke` scope with a throwaway user UUID, a continuity-enabled gateway (built from Ellie `feat/ellie-hermes-memory`) on `:3099`, provider=anthropic / claude-sonnet-4-6. Driven directly against the gateway HTTP API with `curl` (the Hermes-side calls that produce these requests are unit-proven in `tests/agent/test_ellie_bridge.py`; the unproven part was the Ellie-side distill→Forest→recall round-trip).
+
+- **Session 1** — `POST /api/session-end` (conversation `smoke-sess-1`, marker 1) with a user turn stating *"I always deploy on Fridays, never Mondays."* → `202`. Spawned task ran: `gateway_continuity_session_end{result="ok"} 1`, `gateway_continuity_distill_writes 1`.
+- **Forest verify** — bridge read at `2/2/smoke` returned a gateway-distilled memory created at the session-end time: *"Deployment day preferences: Always deploys on Fridays. Never deploys on Mondays."* (the `{title}: {content}` shape from `distill_to_forest`).
+- **Session 2** — `POST /api/turn` (new conversation `smoke-sess-3`, empty history) asking *"which day do I always deploy on, and which do I never deploy on?"* → the turn was primed by the continuity preamble (`gateway_continuity_recall_injected 1`) and Ellie answered: *"Based on what's in your Forest memory: Always deploy on: Friday, Never deploy on: Monday."*
+
+**Pass criteria met:** a fact stated in session 1 was distilled to the Forest at session-end AND surfaced via recall in a later, different session.
+
+**Bug found & fixed by this smoke:** the first attempt used `recall_timeout_ms=250` (the original spec default). The first (cold) Forest recall exceeded 250ms, so the preamble silently timed out — `gateway_continuity_recall_timeout 1`, `recall_injected 0`, and the turn fell back to the agent's own recall tool and answered "I don't have that on record." Warm recall measured ~157ms; cold exceeded 250ms. Re-running with `ELLIE_RECALL_TIMEOUT_MS=3000` closed the loop. The default was raised to **2000ms** in Ellie PR #64 (`fix(continuity): raise recall_timeout_ms default 250→2000`).
+
+**Teardown:** gateway stopped; Hermes config was never modified (drove via curl). Two smoke memories remain in the isolated `2/2/smoke` scope (the bridge has no delete endpoint); they are never read by `2/1` — delete via DB if desired: probe `c98865e0-7edd-4ded-8fe2-36eed03c4c4f` + the distilled "Deployment day preferences" memory.
