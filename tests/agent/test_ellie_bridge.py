@@ -1,4 +1,8 @@
-from agent.ellie_bridge import parse_sse_events, notify_ellie_session_end
+from agent.ellie_bridge import (
+    parse_sse_events,
+    notify_ellie_session_end,
+    maybe_notify_ellie_session_end,
+)
 
 
 def test_parse_sse_extracts_data_json():
@@ -263,3 +267,26 @@ def test_notify_session_end_swallows_network_error():
     with patch("agent.ellie_bridge.httpx.Client", return_value=fake_client):
         notify_ellie_session_end(agent, [{"role": "user", "content": "hi"}],
                                  sidecar_url="http://x", bearer="t")  # must NOT raise
+
+
+def test_maybe_notify_fires_only_for_ellie_backend():
+    sent = []
+    agent = MagicMock()
+    agent.backend = "ellie"
+    agent._gateway_session_key = "c"
+    agent.session_start = None
+    agent._ellie_session_end_sent = False
+    with patch("agent.ellie_bridge.notify_ellie_session_end",
+               side_effect=lambda *a, **k: sent.append(k)):
+        maybe_notify_ellie_session_end(agent, [{"role": "user", "content": "hi"}],
+                                       sidecar_url="http://x", bearer="t")
+        maybe_notify_ellie_session_end(agent, [{"role": "user", "content": "hi"}],
+                                       sidecar_url="http://x", bearer="t")  # fire-once
+    assert len(sent) == 1
+
+    native = MagicMock()
+    native.backend = "native"
+    native._ellie_session_end_sent = False
+    with patch("agent.ellie_bridge.notify_ellie_session_end") as m:
+        maybe_notify_ellie_session_end(native, [], sidecar_url="http://x", bearer="t")
+        m.assert_not_called()
