@@ -2967,6 +2967,25 @@ class AIAgent:
         NOT called per-turn — only at CLI exit, /reset, gateway
         session expiry, etc.
         """
+        # Ellie continuity: notify the sidecar this conversation ended so it can
+        # roll the digest forward + distill to the Forest. Best-effort, fire-once.
+        try:
+            from hermes_cli.config import load_config_readonly
+            _cfg = load_config_readonly().get("agent", {})
+            if _cfg.get("backend") == "ellie":
+                from agent.ellie_bridge import maybe_notify_ellie_session_end
+                # The Ellie-backend gate lives on the agent instance; the forwarder
+                # reads the backend from config, so mirror it here for the helper.
+                self.backend = "ellie"
+                _msgs = messages if isinstance(messages, list) else getattr(self, "_session_messages", [])
+                maybe_notify_ellie_session_end(
+                    self,
+                    _msgs,
+                    sidecar_url=_cfg.get("ellie_sidecar_url", "http://127.0.0.1:3002"),
+                    bearer=_cfg.get("ellie_sidecar_token", ""),
+                )
+        except Exception:
+            pass
         if self._memory_manager:
             try:
                 self._memory_manager.on_session_end(messages or [])

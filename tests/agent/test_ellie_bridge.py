@@ -1,4 +1,8 @@
-from agent.ellie_bridge import parse_sse_events
+from agent.ellie_bridge import (
+    parse_sse_events,
+    notify_ellie_session_end,
+    maybe_notify_ellie_session_end,
+)
 
 
 def test_parse_sse_extracts_data_json():
@@ -192,3 +196,97 @@ def test_forwarder_uses_native_loop_by_default():
 
     assert out == {"final_response": "native"}
     native.assert_called_once()
+
+
+def test_run_turn_sends_conversation_id_prefers_gateway_key():
+    agent = MagicMock()
+    agent._gateway_session_key = "agent:main:telegram:dm:123"
+    agent.session_id = "20260614_090714_abc"
+    fake_client = MagicMock()
+    fake_client.__enter__.return_value = fake_client
+    fake_client.__exit__.return_value = False
+    fake_client.stream.return_value = _FakeStream(['data: {"type":"turn_end","prose":"hi"}'])
+    with patch("agent.ellie_bridge.httpx.Client", return_value=fake_client):
+        run_turn_via_ellie(agent, "hello", sidecar_url="http://x", bearer="t")
+    _, kwargs = fake_client.stream.call_args
+    assert kwargs["json"]["conversation_id"] == "agent:main:telegram:dm:123"
+
+
+def test_run_turn_conversation_id_falls_back_to_session_id():
+    agent = MagicMock()
+    agent._gateway_session_key = None
+    agent.session_id = "20260614_090714_abc"
+    fake_client = MagicMock()
+    fake_client.__enter__.return_value = fake_client
+    fake_client.__exit__.return_value = False
+    fake_client.stream.return_value = _FakeStream(['data: {"type":"turn_end","prose":"hi"}'])
+    with patch("agent.ellie_bridge.httpx.Client", return_value=fake_client):
+        run_turn_via_ellie(agent, "hello", sidecar_url="http://x", bearer="t")
+    _, kwargs = fake_client.stream.call_args
+    assert kwargs["json"]["conversation_id"] == "20260614_090714_abc"
+
+
+def test_notify_session_end_posts_transcript_and_marker():
+    from datetime import datetime
+    agent = MagicMock()
+    agent._gateway_session_key = "agent:main:telegram:dm:9"
+    agent.session_start = datetime(2026, 6, 14, 9, 0, 0)
+    messages = [
+        {"role": "user", "content": "remember I use worktrees"},
+        {"role": "assistant", "content": "noted"},
+        {"role": "tool", "content": "ignored"},
+    ]
+    fake_client = MagicMock()
+    fake_client.__enter__.return_value = fake_client
+    fake_client.__exit__.return_value = False
+    fake_resp = MagicMock()
+    fake_resp.raise_for_status.return_value = None
+    fake_client.post.return_value = fake_resp
+    with patch("agent.ellie_bridge.httpx.Client", return_value=fake_client):
+        notify_ellie_session_end(agent, messages, sidecar_url="http://x", bearer="t")
+    args, kwargs = fake_client.post.call_args
+    assert args[0] == "http://x/api/session-end"
+    body = kwargs["json"]
+    assert body["conversation_id"] == "agent:main:telegram:dm:9"
+    assert body["history"] == [
+        {"role": "user", "content": "remember I use worktrees"},
+        {"role": "assistant", "content": "noted"},
+    ]
+    assert body["marker"] == int(datetime(2026, 6, 14, 9, 0, 0).timestamp() * 1000)
+    assert kwargs["headers"]["Authorization"] == "Bearer t"
+
+
+def test_notify_session_end_swallows_network_error():
+    agent = MagicMock()
+    agent._gateway_session_key = "c"
+    agent.session_start = None  # exercises the time.time() fallback
+    fake_client = MagicMock()
+    fake_client.__enter__.return_value = fake_client
+    fake_client.__exit__.return_value = False
+    fake_client.post.side_effect = RuntimeError("connection refused")
+    with patch("agent.ellie_bridge.httpx.Client", return_value=fake_client):
+        notify_ellie_session_end(agent, [{"role": "user", "content": "hi"}],
+                                 sidecar_url="http://x", bearer="t")  # must NOT raise
+
+
+def test_maybe_notify_fires_only_for_ellie_backend():
+    sent = []
+    agent = MagicMock()
+    agent.backend = "ellie"
+    agent._gateway_session_key = "c"
+    agent.session_start = None
+    agent._ellie_session_end_sent = False
+    with patch("agent.ellie_bridge.notify_ellie_session_end",
+               side_effect=lambda *a, **k: sent.append(k)):
+        maybe_notify_ellie_session_end(agent, [{"role": "user", "content": "hi"}],
+                                       sidecar_url="http://x", bearer="t")
+        maybe_notify_ellie_session_end(agent, [{"role": "user", "content": "hi"}],
+                                       sidecar_url="http://x", bearer="t")  # fire-once
+    assert len(sent) == 1
+
+    native = MagicMock()
+    native.backend = "native"
+    native._ellie_session_end_sent = False
+    with patch("agent.ellie_bridge.notify_ellie_session_end") as m:
+        maybe_notify_ellie_session_end(native, [], sidecar_url="http://x", bearer="t")
+        m.assert_not_called()

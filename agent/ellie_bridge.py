@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import httpx
 import json
+import logging
 from typing import Any, Dict, Iterable, Iterator, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def parse_sse_events(lines: Iterable[str]) -> Iterator[Dict[str, Any]]:
@@ -35,6 +38,18 @@ def _history_to_wire(history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
             out.append({"role": role, "content": content})
     return out
+
+
+def _conversation_id(agent) -> str:
+    """Stable id threading the per-conversation digest. Gateway sessions have a
+    cross-process key; CLI sessions fall back to the per-run session id."""
+    key = getattr(agent, "_gateway_session_key", None)
+    if isinstance(key, str) and key:
+        return key
+    sid = getattr(agent, "session_id", None)
+    if isinstance(sid, str) and sid:
+        return sid
+    return "hermes-unknown"
 
 
 def _drive(events: Iterable[Dict[str, Any]], stream_callback) -> List[Dict[str, Any]]:
@@ -126,6 +141,7 @@ def run_turn_via_ellie(
         "user_text": user_message,
         "history": _history_to_wire(history),
         "skills": [],
+        "conversation_id": _conversation_id(agent),
     }
     headers = {"Authorization": f"Bearer {bearer}"} if bearer else {}
 
@@ -138,3 +154,61 @@ def run_turn_via_ellie(
 
     session_id = getattr(agent, "session_id", None)
     return _events_to_result(user_message, history, events, session_id)
+
+
+def _session_marker(agent) -> int:
+    """Monotonic-across-sessions, stable-within-session marker (epoch millis at
+    session start). Lets Ellie order digest updates and dedupe retries."""
+    start = getattr(agent, "session_start", None)
+    try:
+        if start is not None:
+            return int(start.timestamp() * 1000)
+    except Exception:
+        pass
+    import time
+    return int(time.time() * 1000)
+
+
+def notify_ellie_session_end(
+    agent,
+    messages: List[Dict[str, Any]],
+    *,
+    sidecar_url: str = "http://127.0.0.1:3002",
+    bearer: str = "",
+) -> None:
+    """Best-effort: tell the Ellie sidecar a conversation ended so it can roll
+    the digest forward and distill durable facts to the Forest. Fire-and-forget
+    (Ellie returns 202). NEVER raises — a shutdown must not fail because Ellie
+    is unreachable."""
+    try:
+        payload = {
+            "conversation_id": _conversation_id(agent),
+            "history": _history_to_wire(messages or []),
+            "marker": _session_marker(agent),
+        }
+        headers = {"Authorization": f"Bearer {bearer}"} if bearer else {}
+        with httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+            resp = client.post(
+                f"{sidecar_url}/api/session-end", json=payload, headers=headers
+            )
+            resp.raise_for_status()
+    except Exception as exc:  # noqa: BLE001 — fail-soft by design
+        logger.debug("ellie session-end notify failed (ignored): %s", exc)
+
+
+def maybe_notify_ellie_session_end(
+    agent, messages, *, sidecar_url="http://127.0.0.1:3002", bearer=""
+) -> None:
+    """Fire the session-end notify exactly once per agent, only when routing to
+    the Ellie backend. Fully guarded — never raises."""
+    try:
+        if getattr(agent, "backend", None) != "ellie":
+            return
+        if getattr(agent, "_ellie_session_end_sent", False):
+            return
+        agent._ellie_session_end_sent = True
+        notify_ellie_session_end(
+            agent, messages, sidecar_url=sidecar_url, bearer=bearer
+        )
+    except Exception:  # noqa: BLE001
+        pass
