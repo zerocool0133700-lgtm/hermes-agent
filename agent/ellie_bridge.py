@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import httpx
 import json
+import logging
 from typing import Any, Dict, Iterable, Iterator, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def parse_sse_events(lines: Iterable[str]) -> Iterator[Dict[str, Any]]:
@@ -151,3 +154,43 @@ def run_turn_via_ellie(
 
     session_id = getattr(agent, "session_id", None)
     return _events_to_result(user_message, history, events, session_id)
+
+
+def _session_marker(agent) -> int:
+    """Monotonic-across-sessions, stable-within-session marker (epoch millis at
+    session start). Lets Ellie order digest updates and dedupe retries."""
+    start = getattr(agent, "session_start", None)
+    try:
+        if start is not None:
+            return int(start.timestamp() * 1000)
+    except Exception:
+        pass
+    import time
+    return int(time.time() * 1000)
+
+
+def notify_ellie_session_end(
+    agent,
+    messages: List[Dict[str, Any]],
+    *,
+    sidecar_url: str = "http://127.0.0.1:3002",
+    bearer: str = "",
+) -> None:
+    """Best-effort: tell the Ellie sidecar a conversation ended so it can roll
+    the digest forward and distill durable facts to the Forest. Fire-and-forget
+    (Ellie returns 202). NEVER raises — a shutdown must not fail because Ellie
+    is unreachable."""
+    try:
+        payload = {
+            "conversation_id": _conversation_id(agent),
+            "history": _history_to_wire(messages or []),
+            "marker": _session_marker(agent),
+        }
+        headers = {"Authorization": f"Bearer {bearer}"} if bearer else {}
+        with httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+            resp = client.post(
+                f"{sidecar_url}/api/session-end", json=payload, headers=headers
+            )
+            resp.raise_for_status()
+    except Exception as exc:  # noqa: BLE001 — fail-soft by design
+        logger.debug("ellie session-end notify failed (ignored): %s", exc)
