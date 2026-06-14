@@ -6,6 +6,7 @@ Anthropic-OAuth client.
 """
 from __future__ import annotations
 
+import httpx
 import json
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 
@@ -101,3 +102,37 @@ def _events_to_result(
         "output_tokens": out_tok,
         "total_tokens": in_tok + out_tok,
     }
+
+
+def run_turn_via_ellie(
+    agent,
+    user_message: str,
+    *,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
+    task_id: Optional[str] = None,
+    stream_callback=None,
+    sidecar_url: str = "http://127.0.0.1:3002",
+    bearer: str = "",
+) -> Dict[str, Any]:
+    """Route one Hermes turn to the Ellie sidecar and return Hermes's result dict.
+
+    Note: ``system_message`` and ``persist_user_message`` are intentionally NOT
+    forwarded — Ellie uses its own identity prompt in Phase 1.
+    """
+    history = conversation_history or []
+    payload = {
+        "user_text": user_message,
+        "history": _history_to_wire(history),
+        "skills": [],
+    }
+    headers = {"Authorization": f"Bearer {bearer}"} if bearer else {}
+
+    with httpx.Client(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
+        with client.stream(
+            "POST", f"{sidecar_url}/api/turn", json=payload, headers=headers
+        ) as resp:
+            resp.raise_for_status()
+            events = _drive(parse_sse_events(resp.iter_lines()), stream_callback)
+
+    session_id = getattr(agent, "session_id", None)
+    return _events_to_result(user_message, history, events, session_id)

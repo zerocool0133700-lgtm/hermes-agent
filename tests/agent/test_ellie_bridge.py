@@ -83,3 +83,59 @@ def test_events_to_result_marks_incomplete_on_error():
     result = _events_to_result("hi", [], events, None)
     assert result["completed"] is False
     assert "boom" in result["final_response"]
+
+
+from unittest.mock import patch, MagicMock
+from agent.ellie_bridge import run_turn_via_ellie
+
+
+class _FakeStream:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def raise_for_status(self):
+        pass
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+
+def test_run_turn_via_ellie_posts_and_translates():
+    lines = [
+        'data: {"type":"token","text":"Hi"}',
+        'data: {"type":"turn_end","prose":"Hi"}',
+        'data: {"type":"stats","iterations":1,"prompt_tokens":3,"completion_tokens":1,"outcome":"completed"}',
+    ]
+    agent = MagicMock()
+    agent.session_id = "s1"
+    streamed = []
+
+    fake_client = MagicMock()
+    fake_client.__enter__.return_value = fake_client
+    fake_client.__exit__.return_value = False
+    fake_client.stream.return_value = _FakeStream(lines)
+
+    with patch("agent.ellie_bridge.httpx.Client", return_value=fake_client):
+        result = run_turn_via_ellie(
+            agent,
+            "hello",
+            conversation_history=[{"role": "user", "content": "earlier"}],
+            stream_callback=streamed.append,
+            sidecar_url="http://127.0.0.1:3002",
+            bearer="secret-token",
+        )
+
+    _, kwargs = fake_client.stream.call_args
+    assert kwargs["json"]["user_text"] == "hello"
+    assert kwargs["json"]["history"] == [{"role": "user", "content": "earlier"}]
+    assert kwargs["headers"]["Authorization"] == "Bearer secret-token"
+    assert streamed == ["Hi", None]
+    assert result["final_response"] == "Hi"
+    assert result["completed"] is True
+    assert result["session_id"] == "s1"
