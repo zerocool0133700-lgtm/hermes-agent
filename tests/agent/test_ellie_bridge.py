@@ -290,3 +290,62 @@ def test_maybe_notify_fires_only_for_ellie_backend():
     with patch("agent.ellie_bridge.notify_ellie_session_end") as m:
         maybe_notify_ellie_session_end(native, [], sidecar_url="http://x", bearer="t")
         m.assert_not_called()
+
+
+# ── Task 1: circuit-breaker + graceful floor ──────────────────────────────────
+
+import httpx
+from agent import ellie_bridge
+
+
+class _FakeAgent:
+    session_id = "sess-1"
+    _gateway_session_key = None
+
+
+def _patch_stream_raises(monkeypatch, exc):
+    class _Client:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def stream(self, *a, **k): raise exc
+    monkeypatch.setattr(ellie_bridge.httpx, "Client", _Client)
+
+
+def test_connect_error_returns_graceful_floor(monkeypatch):
+    _patch_stream_raises(monkeypatch, httpx.ConnectError("refused"))
+    res = ellie_bridge.run_turn_via_ellie(_FakeAgent(), "hi")
+    assert res["completed"] is False
+    assert res["model"] == "ellie:unreachable"
+    assert "reach" in res["final_response"].lower()  # "can't reach my brain"
+    assert res["messages"][-1]["role"] == "assistant"
+
+
+def test_timeout_returns_graceful_floor(monkeypatch):
+    _patch_stream_raises(monkeypatch, httpx.ReadTimeout("slow"))
+    res = ellie_bridge.run_turn_via_ellie(_FakeAgent(), "hi")
+    assert res["completed"] is False
+    assert res["model"] == "ellie:unreachable"
+
+
+def test_http_5xx_returns_graceful_floor(monkeypatch):
+    # raise_for_status path: stream context yields a resp whose raise_for_status throws
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def raise_for_status(self): raise httpx.HTTPStatusError("500", request=None, response=None)
+        def iter_lines(self): return iter([])
+    class _Client:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def stream(self, *a, **k): return _Resp()
+    monkeypatch.setattr(ellie_bridge.httpx, "Client", _Client)
+    res = ellie_bridge.run_turn_via_ellie(_FakeAgent(), "hi")
+    assert res["completed"] is False
+    assert res["model"] == "ellie:unreachable"
+
+
+def test_breaker_constants_split_connect_and_read():
+    assert ellie_bridge.ELLIE_CONNECT_TIMEOUT_S == 5.0
+    assert ellie_bridge.ELLIE_BREAKER_TIMEOUT_S == 25.0
