@@ -9,9 +9,39 @@ from __future__ import annotations
 import httpx
 import json
 import logging
+import os
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
+
+ELLIE_WIRE_VERSION = 1  # (used in Task 2)
+ELLIE_CONNECT_TIMEOUT_S = float(os.getenv("ELLIE_CONNECT_TIMEOUT_S", "5.0"))
+ELLIE_BREAKER_TIMEOUT_S = float(os.getenv("ELLIE_BREAKER_TIMEOUT_S", "25.0"))
+
+_BRAIN_UNREACHABLE_MSG = (
+    "I can't reach my brain right now, so I'm staying quiet rather than "
+    "answering as something I'm not. Try again in a moment."
+)
+
+
+def _unreachable_result(user_message, conversation_history, session_id):
+    """Graceful floor: a normal Hermes result dict (never raises) when the Ellie
+    sidecar is unreachable. completed=False so the host treats it as a soft fail."""
+    messages = list(conversation_history or [])
+    messages.append({"role": "user", "content": user_message})
+    messages.append({"role": "assistant", "content": _BRAIN_UNREACHABLE_MSG})
+    return {
+        "final_response": _BRAIN_UNREACHABLE_MSG,
+        "messages": messages,
+        "api_calls": 0,
+        "completed": False,
+        "session_id": session_id,
+        "model": "ellie:unreachable",
+        "provider": "ellie",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+    }
 
 
 def parse_sse_events(lines: Iterable[str]) -> Iterator[Dict[str, Any]]:
@@ -138,21 +168,36 @@ def run_turn_via_ellie(
     """
     history = conversation_history or []
     payload = {
+        "version": ELLIE_WIRE_VERSION,            # Task 2
         "user_text": user_message,
         "history": _history_to_wire(history),
         "skills": [],
         "conversation_id": _conversation_id(agent),
     }
     headers = {"Authorization": f"Bearer {bearer}"} if bearer else {}
-
-    with httpx.Client(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
-        with client.stream(
-            "POST", f"{sidecar_url}/api/turn", json=payload, headers=headers
-        ) as resp:
-            resp.raise_for_status()
-            events = _drive(parse_sse_events(resp.iter_lines()), stream_callback)
-
     session_id = getattr(agent, "session_id", None)
+
+    timeout = httpx.Timeout(
+        ELLIE_BREAKER_TIMEOUT_S,           # read/write/pool ceiling (the breaker)
+        connect=ELLIE_CONNECT_TIMEOUT_S,   # fast connect
+    )
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            with client.stream(
+                "POST", f"{sidecar_url}/api/turn", json=payload, headers=headers
+            ) as resp:
+                resp.raise_for_status()
+                events = _drive(parse_sse_events(resp.iter_lines()), stream_callback)
+    except Exception as exc:  # noqa: BLE001 — graceful floor by design
+        logger.warning("ellie /api/turn unreachable (graceful floor): %s", exc)
+        # Mirror the end-of-stream sentinel so the host's streaming UI closes cleanly.
+        if stream_callback is not None:
+            try:
+                stream_callback(None)
+            except Exception:
+                pass
+        return _unreachable_result(user_message, history, session_id)
+
     return _events_to_result(user_message, history, events, session_id)
 
 
@@ -182,6 +227,7 @@ def notify_ellie_session_end(
     is unreachable."""
     try:
         payload = {
+            "version": ELLIE_WIRE_VERSION,
             "conversation_id": _conversation_id(agent),
             "history": _history_to_wire(messages or []),
             "marker": _session_marker(agent),
