@@ -349,3 +349,23 @@ def test_http_5xx_returns_graceful_floor(monkeypatch):
 def test_breaker_constants_split_connect_and_read():
     assert ellie_bridge.ELLIE_CONNECT_TIMEOUT_S == 5.0
     assert ellie_bridge.ELLIE_BREAKER_TIMEOUT_S == 25.0
+
+
+# ── Task 2: wire-contract version field ──────────────────────────────────────
+
+def test_turn_payload_carries_wire_version(monkeypatch):
+    captured = {}
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def raise_for_status(self): pass
+        def iter_lines(self): return iter([])
+    class _Client:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def stream(self, method, url, json=None, headers=None):
+            captured.update(json or {}); return _Resp()
+    monkeypatch.setattr(ellie_bridge.httpx, "Client", _Client)
+    ellie_bridge.run_turn_via_ellie(_FakeAgent(), "hi")
+    assert captured.get("version") == ellie_bridge.ELLIE_WIRE_VERSION

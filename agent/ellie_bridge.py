@@ -227,6 +227,7 @@ def notify_ellie_session_end(
     is unreachable."""
     try:
         payload = {
+            "version": ELLIE_WIRE_VERSION,
             "conversation_id": _conversation_id(agent),
             "history": _history_to_wire(messages or []),
             "marker": _session_marker(agent),
