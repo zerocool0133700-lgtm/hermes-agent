@@ -9,10 +9,11 @@ fork inherits the cached prompt verbatim.
 
 Three tiers are joined with ``\\n\\n``:
 
-* ``stable``   — identity (SOUL.md or DEFAULT_AGENT_IDENTITY), tool
-  guidance, computer-use guidance, nous subscription block, tool-use
-  enforcement guidance + per-model operational guidance, skills prompt,
-  alibaba model-name workaround, environment hints, platform hints.
+* ``stable``   — identity (SOUL.md or DEFAULT_AGENT_IDENTITY), standing
+  orders (SOP.md), tool guidance, computer-use guidance, nous subscription
+  block, tool-use enforcement guidance + per-model operational guidance,
+  skills prompt, alibaba model-name workaround, environment hints,
+  platform hints.
 * ``context``  — caller-supplied ``system_message`` plus context files
   (AGENTS.md / .cursorrules / etc.) discovered under ``TERMINAL_CWD``.
 * ``volatile`` — memory snapshot, USER.md profile, external memory
@@ -98,6 +99,12 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if not _soul_loaded:
         # Fallback to hardcoded identity
         stable_parts.append(DEFAULT_AGENT_IDENTITY)
+
+    # Standing orders are profile-scoped and hard-loaded independently of
+    # project context so they survive every new session and execution mode.
+    _sop_content = _r.load_sop_md()
+    if _sop_content:
+        stable_parts.append(_sop_content)
 
     # Pointer to the hermes-agent skill + docs for user questions about Hermes itself.
     stable_parts.append(HERMES_AGENT_HELP_GUIDANCE)

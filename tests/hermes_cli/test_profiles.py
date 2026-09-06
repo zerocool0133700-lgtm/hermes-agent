@@ -203,12 +203,14 @@ class TestCreateProfile:
         (default_home / "config.yaml").write_text("model: test")
         (default_home / ".env").write_text("KEY=val")
         (default_home / "SOUL.md").write_text("Be helpful.")
+        (default_home / "SOP.md").write_text("Confirm destructive actions.")
 
         profile_dir = create_profile("coder", clone_config=True, no_alias=True)
 
         assert (profile_dir / "config.yaml").read_text() == "model: test"
         assert (profile_dir / ".env").read_text() == "KEY=val"
         assert (profile_dir / "SOUL.md").read_text() == "Be helpful."
+        assert (profile_dir / "SOP.md").read_text() == "Confirm destructive actions."
 
     def test_clone_config_copies_source_skills(self, profile_env):
         tmp_path = profile_env
