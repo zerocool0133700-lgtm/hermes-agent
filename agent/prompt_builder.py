@@ -1460,7 +1460,7 @@ def build_nous_subscription_prompt(valid_tool_names: "set[str] | None" = None) -
 
 
 # =========================================================================
-# Context files (SOUL.md, AGENTS.md, .cursorrules)
+# Context files (SOUL.md, SOP.md, AGENTS.md, .cursorrules)
 # =========================================================================
 
 def _truncate_content(content: str, filename: str, max_chars: int = CONTEXT_FILE_MAX_CHARS) -> str:
@@ -1500,6 +1500,22 @@ def load_soul_md() -> Optional[str]:
         return content
     except Exception as e:
         logger.debug("Could not read SOUL.md from %s: %s", soul_path, e)
+        return None
+
+
+def load_sop_md() -> Optional[str]:
+    """Load standing orders from ``SOP.md`` in the active HERMES_HOME."""
+    sop_path = get_hermes_home() / "SOP.md"
+    if not sop_path.exists():
+        return None
+    try:
+        content = sop_path.read_text(encoding="utf-8").strip()
+        if not content:
+            return None
+        content = _scan_context_content(content, "SOP.md")
+        return _truncate_content(content, "SOP.md")
+    except Exception as e:
+        logger.debug("Could not read SOP.md from %s: %s", sop_path, e)
         return None
 
 
